@@ -21,6 +21,8 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { claudeWrapper } from "./ClaudeWrapper.js";
+import { geminiWrapper } from "./GeminiWrapper.js";
+import { parseTrigger, type ParsedTrigger } from "./TriggerParser.js";
 
 // ============================================================================
 // Zod Schemas für Tool-Inputs
@@ -159,6 +161,77 @@ Verwende dies um eine frische Session zu starten ohne alten Kontext.`,
           required: [],
         },
       },
+      {
+        name: "delegate_to_gemini",
+        description: `Delegiert eine Aufgabe an Gemini CLI (Claude → Gemini Richtung).
+
+VERWENDUNG:
+- Wenn Claude eine zweite Meinung von Gemini braucht
+- Für Aufgaben, die besser zu Gemini passen
+- Für Architektur-Entscheidungen und High-Level-Planung
+
+Alternativ: Nutze @gemini am Anfang der instruction bei delegate_coding_task
+für automatische Weiterleitung.`,
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            instruction: {
+              type: "string",
+              description: "Aufgabenbeschreibung für Gemini.",
+            },
+            workingDirectory: {
+              type: "string",
+              description: "Optionales Arbeitsverzeichnis.",
+            },
+            timeout: {
+              type: "number",
+              description: "Optionales Timeout in ms (default: 10min).",
+              minimum: 10000,
+              maximum: 3600000,
+            },
+            continueSession: {
+              type: "boolean",
+              description: "Session fortsetzen (default: true).",
+              default: true,
+            },
+          },
+          required: ["instruction"],
+        },
+      },
+      {
+        name: "delegate",
+        description: `Intelligente Delegation mit automatischer Trigger-Erkennung.
+
+VERWENDUNG:
+- @claude am Anfang → Leitet an Claude weiter
+- @gemini am Anfang → Leitet an Gemini weiter
+- Kein Trigger → Leitet an Claude weiter (Standard)
+
+Beispiele:
+- "@claude analysiere diesen Code" → geht an Claude
+- "@gemini plane die Architektur" → geht an Gemini
+- "schreibe einen Test" → geht an Claude (Standard)`,
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            instruction: {
+              type: "string",
+              description: "Aufgabe mit optionalem @claude oder @gemini Trigger am Anfang.",
+            },
+            workingDirectory: {
+              type: "string",
+              description: "Optionales Arbeitsverzeichnis.",
+            },
+            timeout: {
+              type: "number",
+              description: "Optionales Timeout in ms.",
+              minimum: 10000,
+              maximum: 3600000,
+            },
+          },
+          required: ["instruction"],
+        },
+      },
     ],
   };
 });
@@ -265,6 +338,103 @@ ${result.output}`;
         },
       ],
       isError: false,
+    };
+  }
+
+  // ============================================================================
+  // Tool: delegate_to_gemini
+  // ============================================================================
+  if (name === "delegate_to_gemini") {
+    const input = args as {
+      instruction: string;
+      workingDirectory?: string;
+      timeout?: number;
+      continueSession?: boolean;
+    };
+
+    if (!input.instruction) {
+      throw new McpError(ErrorCode.InvalidParams, "instruction ist erforderlich");
+    }
+
+    const result = await geminiWrapper.execute(input.instruction, {
+      workingDirectory: input.workingDirectory,
+      timeout: input.timeout,
+      continueSession: input.continueSession,
+    });
+
+    const statusPrefix = result.success ? "✓ GEMINI SUCCESS" : "✗ GEMINI FAILED";
+    const durationSec = (result.duration / 1000).toFixed(1);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `[${statusPrefix}] (${durationSec}s)\n\n${result.output}`,
+        },
+      ],
+      isError: !result.success,
+    };
+  }
+
+  // ============================================================================
+  // Tool: delegate (mit automatischer Trigger-Erkennung)
+  // ============================================================================
+  if (name === "delegate") {
+    const input = args as {
+      instruction: string;
+      workingDirectory?: string;
+      timeout?: number;
+    };
+
+    if (!input.instruction) {
+      throw new McpError(ErrorCode.InvalidParams, "instruction ist erforderlich");
+    }
+
+    // Trigger parsen
+    const parsed: ParsedTrigger = parseTrigger(input.instruction);
+
+    // An Gemini weiterleiten wenn @gemini erkannt
+    if (parsed.target === 'gemini') {
+      const result = await geminiWrapper.execute(parsed.cleanedMessage, {
+        workingDirectory: input.workingDirectory,
+        timeout: input.timeout,
+      });
+
+      const statusPrefix = result.success ? "✓ @GEMINI SUCCESS" : "✗ @GEMINI FAILED";
+      const durationSec = (result.duration / 1000).toFixed(1);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `[${statusPrefix}] (${durationSec}s)\n[Trigger: @gemini erkannt]\n\n${result.output}`,
+          },
+        ],
+        isError: !result.success,
+      };
+    }
+
+    // Standard: An Claude weiterleiten (@claude oder kein Trigger)
+    const messageForClaude = parsed.target === 'claude' ? parsed.cleanedMessage : input.instruction;
+
+    const result = await claudeWrapper.execute(messageForClaude, {
+      workingDirectory: input.workingDirectory,
+      timeout: input.timeout,
+    });
+
+    const statusPrefix = result.success ? "✓ @CLAUDE SUCCESS" : "✗ @CLAUDE FAILED";
+    const durationSec = (result.duration / 1000).toFixed(1);
+    const triggerInfo = parsed.target === 'claude' ? "[Trigger: @claude erkannt]" : "[Standard: Claude]";
+    const sessionInfo = result.sessionId ? `\n[Session: ${result.sessionId}]` : "";
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `[${statusPrefix}] (${durationSec}s)\n${triggerInfo}${sessionInfo}\n\n${result.output}`,
+        },
+      ],
+      isError: !result.success,
     };
   }
 
