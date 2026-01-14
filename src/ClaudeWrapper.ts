@@ -275,7 +275,11 @@ export class ClaudeWrapper {
         clearTimeout(timeoutId);
         const duration = Date.now() - startTime;
 
-        if (code === 0) {
+        // Erfolg wenn Exit-Code 0 ODER wenn stdout Output hat
+        const hasOutput = stdout.trim().length > 0;
+        const isSuccess = code === 0 || hasOutput;
+
+        if (isSuccess) {
           // Session speichern bei Erfolg
           this.saveSession(cwd, sessionId!, taskCount);
 
