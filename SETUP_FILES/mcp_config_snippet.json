@@ -1,0 +1,23 @@
+{
+  "_dokumentation": "Gemini CLI Konfiguration für autonomen Claude-Bridge Modus",
+
+  "_cli_flags": {
+    "--yolo": "Alle Tools automatisch genehmigen (EMPFOHLEN)",
+    "--approval-mode yolo": "Gleiches wie --yolo",
+    "--allowed-tools delegate_coding_task": "Nur dieses Tool auto-approve"
+  },
+
+  "_empfohlener_start": "gemini --yolo --allowed-tools delegate_coding_task",
+
+  "mcpServers": {
+    "claude-bridge": {
+      "command": "node",
+      "args": [
+        "C:/Users/dmytr/gemini-claude-bridge/dist/index.js"
+      ],
+      "trust": true
+    }
+  },
+
+  "_hinweis": "Kopiere den 'mcpServers' Block in ~/.gemini/settings.json und starte mit --yolo Flag"
+}
